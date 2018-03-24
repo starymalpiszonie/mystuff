@@ -145,7 +145,71 @@ auc(y.test,preds)
 Keras
 ```{r}
 library(keras)
-install_keras()
+#install_keras()
 ```
 
+Prepare data for Keras
+```{r}
+
+mm <- function(x){(x-min(x))/(max(x)-min(x))}
+mm(c(100,50,75))
+
+
+scaled <- nums %>% mutate_all(mm)
+
+keras.data <- cbind(binary.categs,scaled)
+
+keras.train <- as.matrix(keras.data[inp$rand<=8,])
+keras.test <- as.matrix(keras.data[inp$rand>8,])
+
+
+
+```
+
+```{r}
+model <- keras_model_sequential() 
+model %>% 
+  layer_dense(units = 51, activation = "relu", input_shape = c(51)) %>% 
+  #layer_dropout(rate = 0.4) %>% 
+  layer_dense(units = 25, activation = "relu") %>%
+  #layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 10, activation = "relu") %>%
+  layer_dense(units = 1, activation = "sigmoid")
+
+model %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_rmsprop(),
+  metrics = c("binary_accuracy")
+)
+
+history <- model %>% fit(
+  keras.train, y.train, 
+  epochs = 50, batch_size = 50, 
+  validation_split = 0.2#,
+  #verbose=F,
+  #silent=T
+)
+
+```
+
+
+
+
+```{r}
+model %>% evaluate(keras.test, y.test,verbose = 0)
+```
+
+```{r}
+pred <-predict(model,keras.test)
+auc(y.test,pred)
+```
+
+Fischer LDA
+```{r}
+library(MASS)
+wine.lda <- lda(Attrition ~ ., data=train)
+pred<-predict(wine.lda,test,method="predictive")[["posterior"]][,"1"]
+auc(y.test,pred)
+
+```
 

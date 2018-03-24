@@ -106,7 +106,7 @@ test.binary <- as.matrix(test.binary)
 glmnet_classifier = cv.glmnet(x = train.binary, y = y.train, 
                               family = 'binomial', 
                               # L1 penalty
-                              alpha = 0.5,
+                              alpha = 1,
                               # interested in the area under ROC curve
                               type.measure = "auc",
                               # 5-fold cross-validation
@@ -207,5 +207,33 @@ wine.lda <- lda(left ~ ., data=train)
 pred<-predict(wine.lda,test,method="predictive")[["posterior"]][,"1"]
 auc(y.test,pred)
 
+```
+
+Check predictions
+```{r}
+library(lime)
+
+train$left<-as.numeric(train$left)
+train$left<-factor(ifelse(train$left==1,"YES","NO"))
+cfit <- caret::train(left ~ ., 
+                     data = train, 
+                     method = "ranger",
+                     trControl = trainControl(classProbs=TRUE)
+                     )
+
+pred<-predict(cfit,test,type="prob")
+pred[420,]
+
+auc(test$left,pred[,2])
+
+explainer<-lime(train,cfit)
+test$left<-factor(ifelse(test$left==1,"YES","NO"))
+to_test<-(test %>% filter(left=="NO"))[1,]
+to_test <- test[c(1,420),]
+explanations <- explain(to_test, explainer,n_labels = 2,n_features=10)
+
+plot_features(explanations)
+
+which(test$left=="NO")[1]
 ```
 
