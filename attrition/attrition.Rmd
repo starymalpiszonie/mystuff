@@ -1,0 +1,151 @@
+---
+title: "Employee attrition"
+output: html_notebook
+---
+
+
+```{r}
+library(data.table)
+library(dplyr)
+```
+
+Read the data
+```{r}
+inp <- fread("data/employee_attrition.txt")
+```
+
+Cleanup data
+```{r}
+inp$StandardHours<-NULL
+inp$EmployeeCount<-NULL
+inp$EmployeeNumber<-NULL
+inp$Over18<-NULL
+inp$rand<-sample(1:10,nrow(inp),T)
+
+train <- inp %>% filter(rand<=8) %>% select(-rand)
+train$Attrition <- ifelse(train$Attrition=="Yes",1,0)
+
+test <- inp %>% filter(rand>8) %>% select(-rand)
+test$Attrition <- ifelse(test$Attrition=="Yes",1,0)
+```
+
+Build simple tree model
+
+```{r}
+library(rpart)
+
+tree_model <- rpart(Attrition~.,data=train,method = "class")
+```
+
+```{r}
+library(rattle)
+fancyRpartPlot(tree_model)
+```
+
+AUC on test
+```{r}
+pred <- predict(tree_model,test,type="prob")[,2]
+library(pROC)
+
+auc(test$Attrition,pred)
+
+```
+
+Logistic regression
+
+```{r}
+lr_model <- glm(Attrition ~.,family=binomial(link='logit'),data=train)
+summary(lr_model)
+```
+```{r}
+pred <- predict(lr_model,test,type="response")
+auc(test$Attrition,pred)
+```
+
+Random forest
+
+Transform to binary variables
+```{r}
+categs <- inp %>% 
+  select(BusinessTravel,Department,EducationField,Gender,JobRole,MaritalStatus,OverTime)
+
+library(caret)
+dummy <- dummyVars(" ~ .",categs)
+binary.categs <- data.frame(predict(dummy, categs))
+
+nums <- inp %>% select(-BusinessTravel,-Department,-EducationField,-Gender,-JobRole,-MaritalStatus,-OverTime,-Attrition,-rand)
+
+inp.binary <- cbind(binary.categs,nums)
+
+train.binary <- inp.binary[inp$rand<=8,]
+test.binary <- inp.binary[inp$rand>8,]
+
+train.binary$Attrition <- train$Attrition
+test.binary$Attrition <- test$Attrition
+
+```
+
+
+Random forest
+```{r}
+
+library(ranger)
+model.forest <- ranger(Attrition ~ ., data = train.binary,num.trees = 500)
+pred <- predict(model.forest,test.binary,type="response")
+auc(test.binary$Attrition,pred[["predictions"]])
+```
+
+GLM
+```{r}
+library(glmnet)
+y.train <- train.binary$Attrition
+train.binary$Attrition<-NULL
+
+y.test <- test.binary$Attrition
+test.binary$Attrition<-NULL
+
+train.binary<-as.matrix(train.binary)
+test.binary <- as.matrix(test.binary)
+
+glmnet_classifier = cv.glmnet(x = train.binary, y = y.train, 
+                              family = 'binomial', 
+                              # L1 penalty
+                              alpha = 0.5,
+                              # interested in the area under ROC curve
+                              type.measure = "auc",
+                              # 5-fold cross-validation
+                              nfolds = 5,
+                              # high value is less accurate, but has faster training
+                              thresh = 1e-3,
+                              # again lower number of iterations for faster training
+                              maxit = 1e5)
+
+preds = predict(glmnet_classifier,test.binary, type = 'response')[,1]
+
+auc(y.test,preds)
+
+```
+
+xgboost
+```{r}
+library(xgboost)
+
+param <- list(objective = "binary:logistic",max_depth=6,colsample=1)
+
+
+xgboost.cv = xgb.cv(param=param, data = train.binary,label = y.train, nfold = 10, nrounds = 1500, early_stopping_rounds = 100, metrics='auc')
+
+best_iteration = xgboost.cv$best_iteration
+xgb.model <- xgboost(param=param, data = train.binary,label = y.train,nrounds=best_iteration)
+
+preds <- predict(xgb.model,test.binary,type="response")
+auc(y.test,preds)
+```
+
+Keras
+```{r}
+library(keras)
+install_keras()
+```
+
+

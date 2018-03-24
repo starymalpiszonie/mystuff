@@ -1,0 +1,211 @@
+---
+title: "Employee attrition"
+output: html_notebook
+---
+
+
+```{r}
+library(data.table)
+library(dplyr)
+```
+
+Read the data
+```{r}
+inp <- fread("../data/hr.csv")
+```
+
+Cleanup data
+```{r}
+
+inp$rand<-sample(1:10,nrow(inp),T)
+
+train <- inp %>% filter(rand<=8) %>% select(-rand)
+
+
+test <- inp %>% filter(rand>8) %>% select(-rand)
+```
+
+Build simple tree model
+
+```{r}
+library(rpart)
+
+tree_model <- rpart(left~.,data=train,method = "class")
+```
+
+```{r}
+library(rattle)
+fancyRpartPlot(tree_model)
+```
+
+AUC on test
+```{r}
+pred <- predict(tree_model,test,type="prob")[,2]
+library(pROC)
+
+auc(test$left,pred)
+
+```
+
+Logistic regression
+
+```{r}
+lr_model <- glm(left ~.,family=binomial(link='logit'),data=train)
+summary(lr_model)
+```
+```{r}
+pred <- predict(lr_model,test,type="response")
+auc(test$left,pred)
+```
+
+Random forest
+
+Transform to binary variables
+```{r}
+categs <- inp %>% 
+  select(sales,salary)
+
+library(caret)
+dummy <- dummyVars(" ~ .",categs)
+binary.categs <- data.frame(predict(dummy, categs))
+
+nums <- inp %>% select(-sales,-salary,-left)
+
+inp.binary <- cbind(binary.categs,nums)
+
+train.binary <- inp.binary[inp$rand<=8,]
+test.binary <- inp.binary[inp$rand>8,]
+
+train.binary$left <- train$left
+test.binary$left <- test$left
+
+```
+
+
+Random forest
+```{r}
+
+library(ranger)
+model.forest <- ranger(left ~ ., data = train.binary,num.trees = 500)
+pred <- predict(model.forest,test.binary,type="response")
+auc(test.binary$left,pred[["predictions"]])
+```
+
+GLM
+```{r}
+library(glmnet)
+y.train <- train.binary$left
+train.binary$left<-NULL
+
+y.test <- test.binary$left
+test.binary$left<-NULL
+
+train.binary<-as.matrix(train.binary)
+test.binary <- as.matrix(test.binary)
+
+glmnet_classifier = cv.glmnet(x = train.binary, y = y.train, 
+                              family = 'binomial', 
+                              # L1 penalty
+                              alpha = 0.5,
+                              # interested in the area under ROC curve
+                              type.measure = "auc",
+                              # 5-fold cross-validation
+                              nfolds = 5,
+                              # high value is less accurate, but has faster training
+                              thresh = 1e-3,
+                              # again lower number of iterations for faster training
+                              maxit = 1e5)
+
+preds = predict(glmnet_classifier,test.binary, type = 'response')[,1]
+
+auc(y.test,preds)
+
+```
+
+xgboost
+```{r}
+library(xgboost)
+
+param <- list(objective = "binary:logistic",max_depth=6,colsample=1)
+
+
+xgboost.cv = xgb.cv(param=param, data = train.binary,label = y.train, nfold = 10, nrounds = 1500, early_stopping_rounds = 100, metrics='auc')
+
+best_iteration = xgboost.cv$best_iteration
+xgb.model <- xgboost(param=param, data = train.binary,label = y.train,nrounds=best_iteration)
+
+preds <- predict(xgb.model,test.binary,type="response")
+auc(y.test,preds)
+```
+
+Keras
+```{r}
+library(keras)
+#install_keras()
+```
+
+Prepare data for Keras
+```{r}
+
+mm <- function(x){(x-min(x))/(max(x)-min(x))}
+mm(c(100,50,75))
+
+
+scaled <- nums %>% mutate_all(mm)
+
+keras.data <- cbind(binary.categs,scaled)
+
+keras.train <- as.matrix(keras.data[inp$rand<=8,])
+keras.test <- as.matrix(keras.data[inp$rand>8,])
+
+
+
+```
+
+```{r}
+model <- keras_model_sequential() 
+model %>% 
+  layer_dense(units = 51, activation = "relu", input_shape = c(21)) %>% 
+  layer_dropout(rate = 0.4) %>% 
+  layer_dense(units = 10, activation = "relu") %>%
+  layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 5, activation = "relu") %>%
+  layer_dense(units = 1, activation = "sigmoid")
+
+model %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_rmsprop(),
+  metrics = c("binary_accuracy")
+)
+
+history <- model %>% fit(
+  keras.train, y.train, 
+  epochs = 200, batch_size = 1000, 
+  validation_split = 0.2#,
+  #verbose=F,
+  #silent=T
+)
+
+```
+
+
+
+
+```{r}
+model %>% evaluate(keras.test, y.test,verbose = 0)
+```
+
+```{r}
+pred <-predict(model,keras.test)
+auc(y.test,pred)
+```
+
+Fischer LDA
+```{r}
+library(MASS)
+wine.lda <- lda(left ~ ., data=train)
+pred<-predict(wine.lda,test,method="predictive")[["posterior"]][,"1"]
+auc(y.test,pred)
+
+```
+

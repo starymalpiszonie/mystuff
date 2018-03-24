@@ -1,0 +1,303 @@
+---
+title: "Dresses"
+output: html_notebook
+---
+
+```{r}
+library(data.table)
+library(dplyr)
+```
+
+Read the data
+```{r}
+inp <- fread("data/data.txt")
+```
+
+Cleanup
+```{r}
+inp <- inp %>%
+  mutate_all(tolower) %>%
+  mutate(price=ifelse(Price=="average","medium",Price),
+         Season=ifelse(Season=="automn","autumn",Season))
+```
+
+
+Explore the data
+```{r}
+library(ggplot2)
+
+inp <- inp %>%
+  mutate(Style=ifelse(Style %in% c("bohemian","brief","casual","cute","party","sexy","vintage","work"),Style,"other"))
+
+inp %>% 
+  group_by(Style) %>%
+  summarize(cnt=n()) %>%
+  ggplot(aes(x=Style,y=cnt)) +
+  geom_bar(stat="identity")
+```
+
+```{r}
+inp %>% 
+  group_by(Price) %>%
+  summarize(cnt=n()) %>%
+  ggplot(aes(x=Price,y=cnt)) +
+  geom_bar(stat="identity")
+```
+
+```{r}
+inp %>% 
+  group_by(Season) %>%
+  summarize(cnt=n()) %>%
+  ggplot(aes(x=Season,y=cnt)) +
+  geom_bar(stat="identity")
+```
+
+```{r}
+inp <- inp %>%
+  mutate(NeckLine=ifelse(NeckLine %in% c("v-neck","o-neck"),NeckLine,"other"))
+
+inp$Neckline<-NULL
+
+inp %>% 
+  group_by(NeckLine) %>%
+  summarize(cnt=n()) %>%
+  ggplot(aes(x=NeckLine,y=cnt)) +
+  geom_bar(stat="identity") +
+  coord_flip()
+```
+
+```{r}
+inp <- inp %>%
+  mutate(
+  SleeveLength=ifelse(startsWith(SleeveLength,"sle"),"sleeveless",SleeveLength)
+) %>%
+  mutate(SleeveLength=ifelse(startsWith(SleeveLength,"thr"),"three-quarter",SleeveLength))%>%
+  mutate(SleeveLength=ifelse(startsWith(SleeveLength,"half"),"half",SleeveLength)) %>%
+  mutate(SleeveLength=ifelse(startsWith(SleeveLength,"cap"),"cap",SleeveLength)) %>%
+  mutate(SleeveLength=ifelse(SleeveLength %in% c("three-quarter","sleeveless","short","half","full"),SleeveLength,"other"))
+  
+
+inp %>% 
+  group_by(SleeveLength) %>%
+  summarize(cnt=n()) %>%
+  ggplot(aes(x=SleeveLength,y=cnt)) +
+  geom_bar(stat="identity")+
+  coord_flip()
+```
+
+```{r}
+inp <- inp %>%
+  mutate(waiseline=ifelse(waiseline %in% c("natural","empire"),waiseline,"other"))
+
+inp %>% 
+  group_by(waiseline) %>%
+  summarize(cnt=n()) %>%
+  ggplot(aes(x=waiseline,y=cnt)) +
+  geom_bar(stat="identity") +
+  coord_flip()
+```
+
+```{r}
+inp %>% 
+  group_by(Material) %>%
+  summarize(cnt=n()) %>%
+  ggplot(aes(x=Material,y=cnt)) +
+  geom_bar(stat="identity") +
+  coord_flip()
+```
+
+```{r}
+inp$FabricType<-NULL
+inp$Material<-NULL
+```
+
+
+```{r}
+inp %>% 
+  group_by(FabricType) %>%
+  summarize(cnt=n()) %>%
+  ggplot(aes(x=FabricType,y=cnt)) +
+  geom_bar(stat="identity") +
+  coord_flip()
+```
+
+```{r}
+inp <- inp %>%
+  mutate(Decoration=ifelse(Decoration=="null",0,1))
+
+inp %>% 
+  group_by(Decoration) %>%
+  summarize(cnt=n()) %>%
+  ggplot(aes(x=Decoration,y=cnt)) +
+  geom_bar(stat="identity") +
+  coord_flip()
+```
+
+```{r}
+inp <- inp %>%
+  mutate(pattern=ifelse(`Pattern Type`%in% c("solid","print","patchwork","null"),`Pattern Type`,"other"))
+
+inp$`Pattern Type`<-NULL
+
+inp %>% 
+  group_by(pattern) %>%
+  summarize(cnt=n()) %>%
+  ggplot(aes(x=pattern,y=cnt)) +
+  geom_bar(stat="identity") +
+  coord_flip()
+```
+
+```{r}
+to_model <- inp %>%
+  select(Dress_ID, Style, Price, Rating, Size, Season, NeckLine, SleeveLength,waiseline,Decoration, Recommendation, price, pattern)
+
+```
+
+Split train/test
+```{r}
+to_model$rand <-sample(1:10,nrow(to_model),T)
+
+train <- to_model %>% filter(rand<=8)
+test <- to_model %>% filter(rand>8)
+
+train$rand<-NULL
+test$ran<-NULL
+
+train$Dress_ID<-NULL
+test$Dress_ID<-NULL
+
+train$Recommendation<-as.numeric(train$Recommendation)
+test$Recommendation<-as.numeric(test$Recommendation)
+```
+
+
+Build simple tree model
+
+```{r}
+library(rpart)
+
+tree_model <- rpart(Recommendation~.,data=train,method = "class")
+```
+
+```{r}
+library(rattle)
+fancyRpartPlot(tree_model)
+```
+
+AUC on test
+```{r}
+pred <- predict(tree_model,test,type="prob")[,2]
+library(pROC)
+
+auc(test$Recommendation,pred)
+
+```
+
+Logistic regression
+
+```{r}
+lr_model <- glm(Recommendation ~.,family=binomial(link='logit'),data=train)
+summary(lr_model)
+```
+```{r}
+pred <- predict(lr_model,test,type="response")
+auc(test$Recommendation,pred)
+```
+
+Random forest
+
+Transform to binary variables
+```{r}
+to_model$Dress_ID<-NULL
+to_model$Price<-NULL
+library(DiscriMiner)
+
+style <- binarize(to_model %>% select(Style) %>% mutate_all(as.factor))
+size <-binarize(to_model %>% select(Size) %>% mutate_all(as.factor))
+season <-binarize(to_model %>% select(Season) %>% mutate_all(as.factor))
+neckline <-binarize(to_model %>% select(NeckLine) %>% mutate_all(as.factor))
+sleevelength <- binarize(to_model %>% select(SleeveLength) %>% mutate_all(as.factor))
+waistline <- binarize(to_model %>% select(waiseline) %>% mutate_all(as.factor))
+price<-binarize(to_model %>% select(price) %>% mutate_all(as.factor))
+pattern<-binarize(to_model %>% select(pattern) %>% mutate_all(as.factor))
+
+other<-as.matrix(to_model %>% select(Rating,Decoration) %>% mutate(Rating=Rating/5))
+
+colnames(style)<-paste0("style_",colnames(style))
+colnames(size)<-paste0("size_",colnames(size))
+colnames(season)<-paste0("season_",colnames(season))
+colnames(neckline)<-paste0("neckline_",colnames(neckline))
+colnames(sleevelength)<-paste0("sleevelength_",colnames(sleevelength))
+colnames(waistline)<-paste0("waistline_",colnames(waistline))
+colnames(price)<-paste0("price_",colnames(price))
+colnames(pattern)<-paste0("pattern_",colnames(pattern))
+
+binary <- cbind(style,size,season,neckline,sleevelength,waistline,price,pattern,other)
+
+binary.train <- binary[to_model$rand<=8,]
+binary.test<-binary[to_model$rand>8,]
+
+y.train <- as.numeric(to_model[to_model$rand<=8,"Recommendation"])
+y.test <- as.numeric(to_model[to_model$rand>8,"Recommendation"])
+```
+
+
+Random forest
+```{r}
+train2 <- data.frame(binary.train)
+train2$y <- y.train
+
+test2 <- data.frame(binary.test)
+test2$y <- y.test
+
+library(ranger)
+model.forest <- ranger(y ~ ., data = train2,num.trees = 500)
+pred <- predict(model.forest,test2,type="response")
+auc(test2$y,pred[["predictions"]])
+```
+
+GLM
+```{r}
+library(glmnet)
+
+glmnet_classifier = cv.glmnet(x = binary.train, y = y.train, 
+                              family = 'binomial', 
+                              # L1 penalty
+                              alpha = 0.5,
+                              # interested in the area under ROC curve
+                              type.measure = "auc",
+                              # 5-fold cross-validation
+                              nfolds = 5,
+                              # high value is less accurate, but has faster training
+                              thresh = 1e-3,
+                              # again lower number of iterations for faster training
+                              maxit = 1e5)
+
+preds = predict(glmnet_classifier, binary.test, type = 'response')[,1]
+
+auc(y.test,preds)
+
+```
+
+xgboost
+```{r}
+library(xgboost)
+
+param <- list(objective = "binary:logistic",max_depth=3,colsample=0.5)
+
+
+xgboost.cv = xgb.cv(param=param, data = binary.train,label = y.train, nfold = 10, nrounds = 1500, early_stopping_rounds = 100, metrics='auc')
+
+best_iteration = xgboost.cv$best_iteration
+xgb.model <- xgboost(param=param, data = binary.train,label = y.train,nrounds=best_iteration)
+
+preds <- predict(xgb.model,binary.test,type="response")
+auc(y.test,preds)
+```
+
+Keras
+```{r}
+library(keras)
+install_keras()
+```
+
