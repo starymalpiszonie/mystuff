@@ -78,6 +78,8 @@ test.binary <- inp.binary[inp$rand>8,]
 
 train.binary$left <- train$left
 test.binary$left <- test$left
+train.binary$rand<-NULL
+test.binary$rand<-NULL
 
 ```
 
@@ -137,6 +139,97 @@ xgb.model <- xgboost(param=param, data = train.binary,label = y.train,nrounds=be
 preds <- predict(xgb.model,test.binary,type="response")
 auc(y.test,preds)
 ```
+Explain xgboost
+```{r}
+importance <- xgb.importance(feature_names = colnames(train.binary), model = xgb.model)
+head(importance)
+
+to_explain <- as(as.matrix(test.binary[c(1,420),]),"dgCMatrix")
+```
+Explain negative (do not churn)
+```{r}
+e <- predict(xgb.model,to_explain,predcontrib = TRUE)
+e[1,]
+
+```
+
+```{r}
+contribution_plot<-function(explained_one, in_variable_cnt = 10){
+  
+  total <- sum(explained_one$contrib)
+  total.df<-data.frame(
+    variable=c("total"),
+    result=total,
+    abs_result=c(999),
+    feature=c("total"),stringsAsFactors = F)
+  
+  cutoff <-explained_one$cutoff[1]
+  cutoff_logit <- log(cutoff/(1-cutoff))
+  
+  #-- title line
+  TARGET<-explained_one$code[1]
+  score<-round(exp(total)/(1+exp(total)),3)
+  rel<-ifelse(score>=cutoff,">=","<")
+  title_line<-paste0("Code: ",TARGET," Score: ",score,rel,round(cutoff,3))
+  
+  #-- draw the plot
+  explained_one %>%
+    select(contrib,feature,feature_value) %>%
+    mutate(
+      variable=feature,
+      feature=paste0(feature,"=",feature_value),
+      abs_result=abs(contrib),
+      result=contrib,
+      feature=ifelse(variable=="BIAS","BIAS",feature)
+    ) %>%
+    select(variable, result,abs_result,feature) %>%
+    union_all(total.df) %>%
+    arrange(desc(abs_result)) %>%
+    mutate(
+      rnk=row_number(desc(abs_result)),
+      fill_color=ifelse(variable=="total",ifelse(result>cutoff_logit,1,-1),ifelse(result>0,1,-1)),
+      prob=round(exp(result)/(1+exp(result)),3)
+    ) %>%
+    filter(rnk<=in_variable_cnt+1) %>%
+    ggplot(aes(x=reorder(feature,desc(rnk)),y=result,fill=factor(fill_color)))+
+    geom_bar(stat="identity")+
+    #geom_text(aes(label=prob),vjust=0)+
+    coord_flip() +
+    xlab("feature")+
+    ylab("log-likelihood")+
+    geom_hline(yintercept=cutoff_logit)+
+    scale_fill_manual(name="Decision",
+                      breaks=c(-1, 1),
+                      labels=c("Contradicts","Supports"),
+                      values=c("tomato1","dodgerblue3"))+
+    ggtitle(title_line)
+  
+}
+```
+
+```{r}
+
+exp_to_df <- function(wh){
+  explained <- data.frame(e[wh,]) 
+  explained$feature <- row.names(explained)
+  explained$feature_value <- c(to_explain[wh,],NA)
+  colnames(explained) <- c("contrib","feature","feature_value")
+  explained$cutoff<-0.5
+  explained
+}
+
+negative_case <- exp_to_df(1)
+positive_case <- exp_to_df(2)
+
+```
+```{r}
+contribution_plot(negative_case)
+```
+
+```{r}
+contribution_plot(positive_case)
+```
+
 
 Keras
 ```{r}
@@ -212,6 +305,7 @@ auc(y.test,pred)
 Check predictions
 ```{r}
 library(lime)
+library(caret)
 
 train$left<-as.numeric(train$left)
 train$left<-factor(ifelse(train$left==1,"YES","NO"))
@@ -222,18 +316,21 @@ cfit <- caret::train(left ~ .,
                      )
 
 pred<-predict(cfit,test,type="prob")
-pred[420,]
+pred[c(1,420),]
 
 auc(test$left,pred[,2])
-
+train$left<-NULL
 explainer<-lime(train,cfit)
 test$left<-factor(ifelse(test$left==1,"YES","NO"))
 to_test<-(test %>% filter(left=="NO"))[1,]
 to_test <- test[c(1,420),]
-explanations <- explain(to_test, explainer,n_labels = 2,n_features=10)
 
+
+test$left<-train$left<-NULL
+to_test$left<-NULL
+explanations <- explain(to_test, explainer,n_labels = 1,n_features=9)
+to_test$left<-NULL
 plot_features(explanations)
 
-which(test$left=="NO")[1]
 ```
 
